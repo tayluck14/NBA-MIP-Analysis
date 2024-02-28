@@ -1,0 +1,1105 @@
+---
+title: "What Makes a MIP in the NBA?"
+author: "Patrick Towne, Sam Alamutu, Tayin Desai"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.align = "center",
+                      warning = F,
+                      message = F
+)
+
+# Loading in needed packages
+pacman::p_load(tidyverse, dplyr, ggplot2, ggimage, caret, rpart, rpart.plot, broom, GGally, regclass) 
+
+# Loading in basketball data specific packages
+pacman::p_load(hoopR)
+```
+
+## Introduction
+
+At the end of every NBA season, one player is announced as the most improved player (MIP). To win this award, the player must show the most progress during the regular season compared to their play in previous seasons. 
+
+While the award is based on the prior metrics compared to the current season metrics, we wanted to dive deeper to help truly establish what makes a player the MIP. To do so, we want to explore the impact specific metrics play in the decision of the MIP in the NBA. To do so we decided to look at the last 10 MIP Award Winners, and how the season they won the Most Improved Player Award compares to the season before.
+
+
+## Getting the Data
+
+The data we obtained is from the hoopR package, version 2.1.0. It was published on 2023-11-25.
+
+Below is the initial task of retrieving the data. The data we collected is MIP Award winner of the last 10 NBA seasons, and their game statistics from the season they won the award, and the season before they won the award. Thus, the award is determined by the level of play the player competes at, and how that compares to their previous seasons play.
+
+To create a functional data set, we used the load_nba_player_box() function to get player data from each game of a specified time range. Since we wanted the last ten MIPs, we used the regular season data from the 2013 season to the 2023 season. By creating our own vectors with the MIP winners, and the corresponding season that they won ordered by their index. By doing this, we were able to create a functional data frame that includes the average of many important player statistics from both seasons, which we believe will help lead us to analyzing how a player won the award. 
+
+We don't suspect any sample bias because the hoopR package contains raw play-by-play data sourced by ESPN and NBA Stats API. Therefore, the data we are using is pure and not influenced/skewed by any means. As for the questions or measurements, there may be a slight bias because we only analyze the MIPs from the last 10 years. This limits how accurate of a conclusion we can come to in terms of what characteristics a play needs to have to become the MIP.
+
+
+
+```{r get Data}
+
+# Creating a vector that contains the last 10 MIP's, from 2023 - 2013 (in order)
+last_ten_mip <- c("Lauri Markkanen", "Ja Morant", "Julius Randle", "Brandon Ingram", "Pascal Siakam", "Victor Oladipo", "Giannis Antetokounmpo", "CJ McCollum", "Jimmy Butler", "Goran Dragic")
+
+# Creating a vector that contains the last 10 seasons, in the same order as when the last_ten_mip players won
+# 2023 represents the 2022-2023 season, 2022 represents the 2021-2022 season, etc.
+last_ten_seasons <- c(2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013)
+
+# Using a function from the hoopR package to load in NBA player data
+mip_season_data <- load_nba_player_box(
+  seasons = c(2014:2023), # The seasons are based on the ending season (so 2023 is the 2022 - 2023 season)
+  dbConnection = NULL,
+  tablename = NULL
+) |>
+  
+  # Filtering only for regular season games
+  #season_type = 3 is what determines the games to be playoffs, we removed that to gather the regular season data
+  filter(season_type != 3) |>
+  
+  # Selecting the columns of importance
+  select(season,
+         athlete_display_name,
+         minutes,
+         field_goals_made,
+         field_goals_attempted,
+         three_point_field_goals_made,
+         three_point_field_goals_attempted,
+         free_throws_made,
+         free_throws_attempted,
+         rebounds,
+         assists,
+         steals,
+         blocks,
+         turnovers,
+         points,
+         did_not_play,
+         plus_minus,
+         athlete_position_abbreviation,
+         athlete_position_name,
+         athlete_headshot_href
+  ) |>
+  
+  # Filtering the data so that we only get the players that won MIP, and the specific statistics from when they won
+  filter((athlete_display_name == last_ten_mip[1] & season == last_ten_seasons[1]) |
+           (athlete_display_name == last_ten_mip[2] & season == last_ten_seasons[2]) |
+           (athlete_display_name == last_ten_mip[3] & season == last_ten_seasons[3]) |
+           (athlete_display_name == last_ten_mip[4] & season == last_ten_seasons[4]) |
+           (athlete_display_name == last_ten_mip[5] & season == last_ten_seasons[5]) |
+           (athlete_display_name == last_ten_mip[6] & season == last_ten_seasons[6]) |
+           (athlete_display_name == last_ten_mip[7] & season == last_ten_seasons[7]) |
+           (athlete_display_name == last_ten_mip[8] & season == last_ten_seasons[8]) |
+           (athlete_display_name == last_ten_mip[9] & season == last_ten_seasons[9]) |
+           (athlete_display_name == last_ten_mip[10] & season == last_ten_seasons[10])) |>
+  
+  # Removing any games where they did not play
+  filter(did_not_play == "FALSE") |>
+  
+  # Grouping the data by their name, season, and adding position and headshot so they stay with the data
+  group_by(athlete_display_name,
+           season,
+           athlete_position_abbreviation,
+           athlete_headshot_href) |>
+  
+  # Calculating the average of each stat to get a comprehensive value from the season
+  summarize(
+    avg_mins = mean(minutes),
+    avg_fg_made = mean(field_goals_made),
+    avg_fg_attempted = mean(field_goals_attempted),
+    avg_three_made = mean(three_point_field_goals_made),
+    avg_three_attempted = mean(three_point_field_goals_attempted),
+    avg_free_throw_made = mean(free_throws_made),
+    avg_free_throw_attempted = mean(free_throws_attempted),
+    avg_points = mean(points),
+    avg_rebounds = mean(rebounds),
+    avg_assists = mean(assists),
+    avg_steals = mean(steals),
+    avg_blocks = mean(blocks),
+    avg_turnovers = mean(turnovers))
+
+
+# Using a function from the hoopR package to load in NBA data
+before_mip_season <- load_nba_player_box(
+  seasons = c(2013:2022), # The seasons are based on the ending season (so 2023 is the 2022 - 2023 season)
+  dbConnection = NULL,
+  tablename = NULL
+) |>
+  
+  # Filtering out so we only have regular season data
+  #season_type = 3 is what determines the games to be playoffs, we removed that to gather the regular season data
+  filter(season_type != 3) |>
+  
+  # Selecting only the columns of importance
+  select(season,
+         athlete_display_name,
+         minutes,
+         field_goals_made,
+         field_goals_attempted,
+         three_point_field_goals_made,
+         three_point_field_goals_attempted,
+         free_throws_made,
+         free_throws_attempted,
+         rebounds,
+         assists,
+         steals,
+         blocks,
+         turnovers,
+         points,
+         did_not_play,
+         #plus_minus
+         athlete_position_abbreviation,
+         #athlete_position_name,
+         athlete_headshot_href
+  ) |>
+  
+  # Filtering so that we get the player that won MIP, but the season before they won MIP, so we can compare both seasons
+  filter((athlete_display_name == last_ten_mip[1] & season == last_ten_seasons[2]) |
+           (athlete_display_name == last_ten_mip[2] & season == last_ten_seasons[3]) |
+           (athlete_display_name == last_ten_mip[3] & season == last_ten_seasons[4]) |
+           (athlete_display_name == last_ten_mip[4] & season == last_ten_seasons[5]) |
+           (athlete_display_name == last_ten_mip[5] & season == last_ten_seasons[6]) |
+           (athlete_display_name == last_ten_mip[6] & season == last_ten_seasons[7]) |
+           (athlete_display_name == last_ten_mip[7] & season == last_ten_seasons[8]) |
+           (athlete_display_name == last_ten_mip[8] & season == last_ten_seasons[9]) |
+           (athlete_display_name == last_ten_mip[9] & season == last_ten_seasons[10]) |
+           (athlete_display_name == last_ten_mip[10] & season == last_ten_seasons[11])) |>
+  
+  # Removing any games where they didn't play
+  filter(did_not_play == "FALSE") |>
+  
+  # Grouping the data by their name, season, and keeping the position and headshot link
+  group_by(athlete_display_name, 
+           season,
+           athlete_position_abbreviation,
+           athlete_headshot_href) |>
+  
+  # Calculating the mean for each measure, to get a comprehensive value of each stat from the season
+  summarize(
+    avg_mins = mean(minutes),
+    avg_fg_made = mean(field_goals_made),
+    avg_fg_attempted = mean(field_goals_attempted),
+    avg_three_made = mean(three_point_field_goals_made),
+    avg_three_attempted = mean(three_point_field_goals_attempted),
+    avg_free_throw_made = mean(free_throws_made),
+    avg_free_throw_attempted = mean(free_throws_attempted),
+    avg_points = mean(points),
+    avg_rebounds = mean(rebounds),
+    avg_assists = mean(assists),
+    avg_steals = mean(steals),
+    avg_blocks = mean(blocks),
+    avg_turnovers = mean(turnovers))
+
+# Unioning the data together, since they have all of the same columns -> This allows the data to stack on each other
+mip_final <- rbind(before_mip_season, mip_season_data) |>
+  
+  # Changing the fg made and the three pointer made into percentages
+  mutate(fg_percent = (avg_fg_made/avg_fg_attempted)*100,
+         three_percent = (avg_three_made/avg_three_attempted)*100,
+         ft_percent = (avg_free_throw_made/avg_free_throw_attempted)*100) |>
+  
+  # Adding a column that can differentiate if it is the season the player won MIP, or the season before
+  mutate(mip_season = ifelse((athlete_display_name == last_ten_mip[1] & season == last_ten_seasons[1]) |
+                               (athlete_display_name == last_ten_mip[2] & season == last_ten_seasons[2]) |
+                               (athlete_display_name == last_ten_mip[3] & season == last_ten_seasons[3]) |
+                               (athlete_display_name == last_ten_mip[4] & season == last_ten_seasons[4]) |
+                               (athlete_display_name == last_ten_mip[5] & season == last_ten_seasons[5]) |
+                               (athlete_display_name == last_ten_mip[6] & season == last_ten_seasons[6]) |
+                               (athlete_display_name == last_ten_mip[7] & season == last_ten_seasons[7]) |
+                               (athlete_display_name == last_ten_mip[8] & season == last_ten_seasons[8]) |
+                               (athlete_display_name == last_ten_mip[9] & season == last_ten_seasons[9]) |
+                               (athlete_display_name == last_ten_mip[10] & season == last_ten_seasons[10]), 
+                             "MIP",
+                             "Before")) |>
+  
+  # Removing the columns that are no longer needed in the data frame
+  select(-c(avg_fg_attempted, avg_fg_made, avg_three_made, avg_three_attempted, avg_free_throw_attempted, avg_free_throw_made))
+
+
+# Displaying a tibble of the new dataset
+tibble(mip_final)
+
+```
+
+To create this data set there was a lot of data wrangling and formatting that took place. This was a crucial step to take before the analysis process: it is vital that all the data we are using is looking at the right time periods, parts of the season (regular season), the player, and how the data is measured, which in our case we wanted to summarize the game data to get overall measures of season long data.
+
+
+## Positional make-up of the MIP winners
+
+To get a better understanding of the basic make-up of the MIP winners, we decided that it would be best to display the season and what position each player plays. Thus, giving us a better understanding of what role a player may be expected to play etc. Before creating the graph, it is important to understand what role each position plays. In basketball there are five positions that a player can be:
+
+Point Guard (PG): Traditionally, point guards are expected to run the team's offense by controlling the ball and making sure that it gets to the right player at the right time.
+
+Shooting Guard (SG): Traditionally, guard's main objective is to score points for their team. Shooting guards are often the most efficient shooter from three-point range, and are expected defend the perimeter on defense
+
+Small Forward (SF): Traditionally, small forwards are responsible for scoring points and defending. The styles of small forwards varies greatly, since they are normally larger than point guards and shoot guards, but smaller than power forwards and centers.
+
+Power Forward (PF): Traditionally, the power forward position has a variety of responsibilities, including rebounding, screen setting, rim protecting, and scoring. Power forwards play a similar role to centers, but are smaller.
+
+Center (C): Traditionally, centers are valued for their ability to protect their own goal from high-percentage close attempts on defense, while scoring and rebounding with high efficiency on offense. Centers are likely the tallest player on the team, since the center often needs a large presence in the paint (the rectangular lane underneath the hoop on a basketball court).
+
+With a better understanding of the roles each position has, we can now create the visualization:
+
+
+```{r MIP by Position}
+
+
+# Filtering the data by only the seasons the player won MIP
+only_mip <- mip_final |>
+  filter(mip_season == "MIP")
+
+# Saving the graph
+mip_season_graph <- ggplot(data = only_mip,
+                           mapping = aes(x = season,
+                                         y =  athlete_position_abbreviation,
+                                         image = athlete_headshot_href)) +
+  
+  # Adding the headshots of each player
+  geom_image(size = .3) + 
+  
+  # Changing the theme
+  theme_bw() +
+  
+  # Adding labels for the axis and a title
+  labs(x = "MIP Season",
+       y = "Position",
+       title = "The Last 10 MIP's") +
+  
+  # Centering the title
+  theme(plot.title = element_text(hjust = 0.5)) +
+  
+  # Changing the breaks and the labels for the x axis
+  scale_x_continuous(breaks = (2014:2023),
+                     labels = c("2013-2014", "2014-2015", "2015-2016", "2016-2017", "2017-2018", "2018-2019", "2019-2020", "2020-2021",   "2021-2022", "2022-2023"),
+                     minor_breaks = NULL) +
+  
+  scale_y_discrete(limits = c("PF","SF", "SG", "PG")) +
+  
+  # Making the title bold
+  theme(plot.title = element_text(face = "bold"))
+
+
+# Displaying the graph
+mip_season_graph
+
+```
+From the graph, we can see that in the last 10 years the most common position to win the Most Improved Player Award is Power Forwards (PF). With 4 Power Forwards winning the award in the last 10 years, they are double the next closest position for number of times won. Point Guards (PG), Shooting Guards (SG), and Small Forwards (SF) have each won 2 times in the last 10 years. 
+
+An important thing to note is that in the last 10 years no Center has won the MIP Award. This is a key takeaway, especially since the Center plays a very different roll than the other positions; where they are expected to protect the rim and get rebound more than any other position.
+
+
+## MIP Player Stat Boxplots
+
+Now that we have a better understanding of the MIP winner data, we can now dive into looking at the player stats from the players MIP season and the season before. To do this, we will make box plots for each important player statistic, and how the statistic differs between the 2 seasons.
+
+```{r Facet Wrapped Box Plots}
+
+# Creating long data to use for facet_wrap()
+# Removing columns that are not needed for this analysis
+long_mip_data <- mip_final |>
+  
+  # Pivoting the columns to make long data
+  pivot_longer(cols = c(avg_mins:ft_percent),
+               names_to = "Measure",
+               values_to = "Value") 
+
+# Saving the graphs as facet_point
+facet_point <- ggplot(data = long_mip_data,
+                      mapping = aes(x = Value,
+                                    y = mip_season,
+                                    fill = mip_season)) +
+  # Removing the legend
+  geom_boxplot(show.legend = FALSE) +
+  
+  scale_fill_manual(values=c("turquoise","violetred1")) +
+  
+  # Creating a facet wrap to look individually by the measure
+  facet_wrap(. ~ Measure,
+             ncol = 2, # Making it so there are 2 columns of graphs
+             scales="free_x") + # Making independent x-axis for each feature
+  
+  # Changing the theme
+  theme_bw() +
+  
+  labs(x = NULL,
+       y = NULL,
+       title = "MIP Statistics") +
+  
+  # Centering the title
+  theme(plot.title = element_text(hjust = 0.5)) +
+  
+  # Making the title bold
+  theme(plot.title = element_text(face = "bold"))
+
+# Displaying the graphs
+facet_point
+
+
+```
+
+By looking at the previous box plots, we can see that some player variables see a more significant change from the season before to the season the player wins the Most Improved Player Award. The three metrics that stand out the most from all of the boxplots are: avg_points, ft_percent, and three_percent. 
+
+
+## Finding the Most Important Variable
+
+After looking at the various box plots, it is clear that some player metrics from the 2 seasons differ more than others. To help us establish what the most important variable is for classifying the Most Improved Player, we decided to create a Classification Tree to help up identify what variables are most important for winning the MIP award. 
+
+First, we will start by creating the full decision tree, and displaying the CP table to help us establish where to prune.
+
+```{r MIP Classification Full Tree}
+
+# Building the full tree
+mip_tree_full <-
+  rpart(
+    # For the formula, including each variable that could be relevant towards winning the MIP award
+    formula = mip_season ~  avg_mins + avg_points + avg_rebounds +  avg_assists +  avg_steals + avg_blocks +  avg_turnovers + fg_percent + three_percent + ft_percent,
+    
+    # Using the mip_final data we created earlier
+    data = mip_final,
+    
+    method = "class",
+    
+    parms = list(split = "information"),
+    
+    minsplit = 2,
+    
+    minbucket = 1,
+    
+    cp = -1
+  )
+
+# Displaying the cptable of the full tree as a data frame
+mip_tree_full$cptable |>
+  data.frame()
+
+```
+
+Next, we will find the appropriate x-error cutoff and the CP prune value.
+
+```{r MIP Classification Tree Prune}
+
+mip_tree_full$cptable |>
+  data.frame() |> # dplyr verbs can only be used on data frames
+  
+  slice_min(xerror, n = 1) |> # Finding the row with the smallest xerror using slice_min()
+  
+  slice_head(n = 1) |> # For some reason the same value appeared twice, so I used slice_head to only select one of them
+  
+  mutate(xcutoff = xerror + xstd) |>
+  
+  pull(xcutoff) -> xcutoff  # Gettting xcutoff as just a single numeric object
+
+
+mip_tree_full$cptable |>
+  data.frame()|>
+  
+  # Keeping rows that have xerror < xcutoff
+  filter(xerror < xcutoff) |>
+  
+  slice(1) |> # Using slice to pick the first row
+  
+  pull(CP) -> cp_cutoff # Storing cp cutoff
+
+# Labeling the xerror and cp value for the output
+c("xerror cutoff" = xcutoff,
+  "cp prune value" = cp_cutoff)
+
+
+```
+
+Finally, we can prune the full tree and identify the each variables importance for classifying the Most Improved Player.
+
+```{r MIP Classification Tree Variable Importance}
+
+# Pruning the tree
+prune(tree = mip_tree_full,
+      cp = cp_cutoff) -> mip_pruned
+
+
+
+# Plotting the pruned tree
+rpart.plot(
+  x = mip_pruned,
+  type = 5,
+  extra = 101,
+  box.palette = "Purples"
+)
+
+# Looking at the importance of each variable
+varImp(object = mip_pruned) |>
+  arrange(desc(Overall))
+
+```
+
+From looking at the pruned classification tree, and the calculated variable importance, it is very clear that average points is the most important factor when identifying who will win the Most Improved Player Award. In addition, the next 3 highest ranked variables by variable importance (free throw percentage, three point percentage, and field goal percentage) are all directly correlated with a players average points. These 3 variables are all a measure of shooting, just each from a different form: 
+
+Free Throw %: The percent of shots that are made from free throws.
+
+Three Point %: The percent of shots that are made from beyond the 3-point line.
+
+Field Goal %: The percent of all shots from the field (This includes three pointers, but excludes free throws). 
+
+So, the next variables that help classify an MIP is related to points, which truly shows how important points are when identifying what player will win the MIP award.
+
+But, when looking at the pruned classification tree, we can see that the tree failed to predict one prediction. It is shown that 1 player scored less than 20 points in their MIP season. Since this is an outlier compared to the other values, we can dive further into the data to identify what player this was, and what could've made them MIP.
+
+
+## Comparing Point from MIP Season and the Season Before
+
+By creating a dumbell plot, we can identify what player averaged less than 20 points in their MIP season, and draw further insights about the change in average points from ever MIP winner in the last 10 seasons.
+
+```{r Average Points Dumbell Chart}
+
+
+# Saving the graph
+mip_dumbell <- ggplot(data = mip_final,
+                      mapping = aes(
+                        x = avg_points,
+                        y = athlete_display_name,
+                        color = mip_season # Making the color be assigned to if the player was the MIP or the season before
+                      )) +
+  
+  # Connecting the points
+  geom_line(color = "black") +
+  
+  # Adding points for the average points
+  geom_point(size = 2) +
+  
+  scale_color_manual(values=c("turquoise","violetred1")) +
+  
+  
+  # Changing the labels of the graph
+  labs(x = "Average Points Per Game",
+       y = NULL,
+       title = "Points Per Game By Season",
+       color = "Season"
+  ) + 
+  
+  theme_bw() +
+  
+  # Centering the title
+  theme(plot.title = element_text(hjust = 0.5)) +
+  
+  # Making the title bold
+  theme(plot.title = element_text(face = "bold")) +
+  
+  # Used to sort the players
+  scale_y_discrete(limits = c("Julius Randle", "Ja Morant", "Brandon Ingram", "Giannis Antetokounmpo", "Victor Oladipo", "Lauri Markkanen", "Goran Dragic", "Jimmy Butler", "Pascal Siakam", "CJ McCollum"))
+
+# Displaying the graph
+mip_dumbell
+
+
+```
+From the dumbbell plot, we can see that each player has a significant increase in points from the previous season to their MIP season. Using the graph we are also able to identify who the player who was not classified was: Pascal Siakam. Although Pascal Siakam was not correctly identified, we still see that he has a significant increase in average points over the 2 seasons.
+
+
+## Pascal Siakam's MIP Stats
+
+Although we've established that Pascal Siakam still has a significant increase in average point per game, we still want to see if there are any other factors towards why he wasn't classified as an MIP:
+
+```{r player_stat_comparisons}
+
+
+player_list <- unique(mip_final$athlete_display_name) #put player names into a list
+
+for (player in player_list) { #iterate through list, create a dataset for each player of their before and mip seaons - named accurately
+  player_data <- subset(long_mip_data, athlete_display_name == player)
+  assign(paste0("player_", sub(" ", "_", player)), player_data)
+}
+
+
+player_comparison_bar <- function(player_data){ # a function that creates a bar plot of each statistic when given player data
+  
+  # Creating a bar graph
+  ggplot(data = player_data,
+         aes(x = Measure,
+             y = Value,
+             fill = mip_season)) + 
+    
+    geom_bar(position = "dodge2", stat = "identity") +
+    scale_fill_manual(values=c("turquoise","violetred1")) +
+    
+    # Grouping my the measure for the graphs
+    facet_wrap(~Measure, 
+               nrow = 2,
+               scales = "free") + 
+    
+    # Adding labels to the grpah
+    labs(
+      title=paste(unique(player_data$athlete_display_name),",",unique(player_data$athlete_position_abbreviation)),
+      x=NULL,
+      y=NULL,
+      fill = "Season:") +
+    
+    # Changing the theme
+    theme_minimal() +
+    theme(axis.text.x = element_blank()
+    ) +
+    
+    # Editing the formatting of the legend, and title
+    theme(plot.title = element_text(hjust = 0.5)) +
+    
+    theme(legend.position = "bottom") + 
+    
+    theme(plot.title=element_text(face="bold"))
+  
+}
+
+player_data_list <- lapply(player_list, function(player) { # applying a function to player list to create a list of player data when the name matches
+  subset(long_mip_data, athlete_display_name == player)
+})
+
+for (i in seq_along(player_data_list)) { # looping through player data list and using previous function to create a bar plot for each player
+  player_plot <- player_comparison_bar(player_data_list[[i]])
+  assign(paste0("player_plot_", i), player_plot)
+}
+
+player_plot_9
+
+```
+
+Looking at all of Pascal Siakam's stats from the before MIP season and his MIP season, there is still a significant increase in his points. While his average points is below 20, his points from 7.3 to 16.9, which is almost a 10 point jump. So, it is clear that the average points still plays an important role in winning the MIP. In addition to an increase in average points, Pascal Siakam saw a large increase in three point percentage, which would likely be correlated with the increase in average points. Other than shooting, we see that Pascal Siakam has a clear increase in rebounds, turnovers, and assists. 
+
+
+## Linear Regression
+
+Below is a linear model of the correlations between each statistic and the statistic with the highest variable importance in determining MIP: Average points. 
+
+Before creating the linear model, a correlation matrix was created, and showed that multiple statistics had issues with multicolinearity. The multicolinearity was a result of having multiple point related metrics, specifically measures related to field goals, threes, and free throws. Each of these metrics have direct relationships with points as they are all point scoring opportunities. 
+
+By removing average field goals made and attempted, average threes attempted, average free throw attempted, average rebounds, and average assist, the variance inflation factor of each of the remaining variables was reduced to below 10. Next, looking at a plot of the residuals it was found that the average of the residuals was close enough to 0 and the model was appropriate to use for analysis. 
+
+
+```{r Linear Regression 1}
+
+# Previous steps taken that have been commented out:
+
+# selecting the truly numeric rows
+#mip_final |>
+#  select(avg_points, fg_percent, three_percent, ft_percent, avg_mins, avg_rebounds, avg_assists, avg_steals, avg_blocks, avg_turnovers) |>
+#  # formatting the data
+#  pivot_longer( cols = c(fg_percent, three_percent, ft_percent, avg_mins, avg_rebounds, avg_assists, avg_steals, avg_blocks, avg_turnovers),
+#                names_to = "variable",
+#               values_to = "percentage") |>
+#  #creating a plot to investigate the relationships between each explanatory variable and avg_ponts (response)
+#  ggplot(mapping = aes(x=percentage,
+#                       y = avg_points)) +
+#  geom_point() +
+#  geom_smooth(method = "loess",
+#              formula = y~x, 
+#             se=F) +
+#  facet_wrap(facets = ~variable,
+#             scales = "free_x")
+
+
+#Commented Out because not wanted in knitted document
+# looking for multicolinearity using a correlation matrix
+#mip_final |> 
+#    
+# selecting the truly numeric rows
+#  select(avg_points, fg_percent, three_percent, ft_percent, avg_mins, avg_rebounds, avg_assists, avg_steals, avg_blocks, avg_turnovers) |>
+#creating the correlation matrix
+#  ggcorr(low ="red",
+#         mid = "white",
+#       high = "blue",
+#         label = T,
+#         label_round = 2)
+
+# creating a dataset to use in the regression
+player_stats_reg <- mip_final |>
+  select(avg_points, 
+         fg_percent, 
+         three_percent, 
+         ft_percent, 
+         avg_mins, 
+         avg_rebounds, 
+         avg_assists, 
+         avg_steals, 
+         avg_blocks, 
+         avg_turnovers)
+
+#creating the regrression - subtracted rows above 10 from VIF
+player_stats_lm <- lm(formula = avg_points ~ . 
+                      - fg_percent
+                      - three_percent
+                      - ft_percent,
+                      data = player_stats_reg) 
+
+#Commented Out because not wanted in knitted document
+#looking at regression statistics
+#summary(player_stats_lm)
+
+#Commented Out because not wanted in knitted document
+#more regression statistics
+stats_estimates <- tidy(player_stats_lm) 
+
+#making the data more legible
+stats_estimates |>
+  mutate(across(.cols = where(is.numeric),
+                .fns = round,
+                digits = 3))
+
+#Commented Out because not wanted in knitted document
+# using variance inflation factor to determine which variables are causing problems
+#VIF(player_stats_lm)
+
+
+#Commented Out because not wanted in knitted document
+#Calculating the fit statistics
+#Creating a function to calculate mae and mae reducation
+#MAE <-function(actual, predicted){
+#  mae <- abs(actual-predicted) |> mean()
+#  mae_red <- 1 - mae/mean(abs(actual - mean(actual)))
+#  return(list(mae = mae,
+#              reduction = mae_red))
+#}
+
+#Commented Out because not wanted in knitted document
+#adding  model data to original data set
+#player_stats2 <- augment_columns(x = player_stats_lm,
+#                                 data = player_stats_reg)
+#Commented Out because not wanted in knitted document
+#finding fit statistics
+#player_stats2 |>
+#  summarize(
+#    R2 = cor(avg_points, .fitted)^2,
+#    MAE = MAE(actual = player_stats_reg$avg_points,
+#    predicted = player_stats_lm$fit)$mae,
+#    MAER = MAE(actual = player_stats_reg$avg_points,
+#    predicted = player_stats_lm$fit)$reduction
+#  )
+
+# creating the plot for the linear model
+resid_plot <- augment_columns(
+  x = player_stats_lm,
+  data = player_stats_reg
+) |>
+  ggplot(mapping = aes(x=.fitted,
+                       y=.resid)) +
+  geom_point() +
+  labs(x="Predicted Average Points",
+       y="Residual") +
+  geom_hline(yintercept = 0,
+             color = "red",
+             linetype="dashed",
+             linewidth=1) + 
+  geom_smooth(method = "loess",
+              formula = y~x,
+              se=F) +
+  
+  theme_bw() +
+  
+  # Centering the title
+  theme(plot.title = element_text(hjust = 0.5)) +
+  
+  # Making the title bold
+  theme(plot.title = element_text(face = "bold")) +
+  
+  labs(title = "Residual Plot of Last 10 MIPs")
+
+
+resid_plot
+#diagnose any variable causing nonlinearity  in the model
+#gg_diagnose(fitted.lm = player_stats_lm,
+#           plot.all = F)
+
+```
+
+The above residual plot shows no clear pattern, and therefore the model is not comprehensive or reliable for making predictions about a player's average points. The lack of pattern is due to the lack of data points the model is based on.
+
+
+```{r Linear Regression 2}
+#Creating a new data set to perform a linear regression
+player_stats2 <- load_nba_player_box(
+  seasons = c(2022),
+  dbConnection = F,
+  tableNames = F
+) |>
+  # Selecting the columns of importance
+  select(season,
+         athlete_display_name,
+         minutes,
+         field_goals_made,
+         field_goals_attempted,
+         three_point_field_goals_made,
+         three_point_field_goals_attempted,
+         free_throws_made,
+         free_throws_attempted,
+         rebounds,
+         assists,
+         steals,
+         blocks,
+         turnovers,
+         points,
+         did_not_play,
+         plus_minus,
+         athlete_position_abbreviation,
+         athlete_position_name,
+         athlete_headshot_href
+  ) |>
+  # Removing any games where they did not play
+  filter(did_not_play == "FALSE") |>
+  
+  # Grouping the data by their name, season, and adding position and headshot so they stay with the data
+  group_by(athlete_display_name,
+           season,
+           athlete_position_abbreviation,
+           athlete_headshot_href) |>
+  
+  # Calculating the average of each stat to get a comprehensive value from the season
+  summarize(
+    avg_mins = mean(minutes),
+    avg_fg_made = mean(field_goals_made),
+    avg_fg_attempted = mean(field_goals_attempted),
+    avg_three_made = mean(three_point_field_goals_made),
+    avg_three_attempted = mean(three_point_field_goals_attempted),
+    avg_free_throw_made = mean(free_throws_made),
+    avg_free_throw_attempted = mean(free_throws_attempted),
+    avg_points = mean(points),
+    avg_rebounds = mean(rebounds),
+    avg_assists = mean(assists),
+    avg_steals = mean(steals),
+    avg_blocks = mean(blocks),
+    avg_turnovers = mean(turnovers)) |>
+  
+  filter(avg_steals < 2.2)
+
+#Commented out as to not display in knintted doc
+# selecting the truly numeric rows
+#player_stats2 |>
+#  select(avg_points, avg_fg_made, avg_fg_attempted, avg_three_made, avg_three_attempted, avg_free_throw_made, avg_free_throw_attempted, avg_mins, avg_rebounds, avg_assists, avg_steals, avg_blocks, avg_blocks, avg_turnovers) |>
+# formatting the data
+#  pivot_longer( cols = c(avg_fg_made, avg_fg_attempted, avg_three_made, avg_three_attempted, avg_free_throw_made, avg_free_throw_attempted, avg_mins, avg_rebounds, avg_assists, avg_steals, avg_blocks, avg_blocks, avg_turnovers),
+#                names_to = "variable",
+#               values_to = "percentage") |>
+#creating a plot to investigate the relationships between each explanatory variable and avg_ponts (response)
+#  ggplot(mapping = aes(x=percentage,
+#                       y = avg_points)) +
+#  geom_point() +
+#  geom_smooth(method = "loess",
+#              formula = y~x, 
+#              se=F) +
+#  facet_wrap(facets = ~variable,
+#             scales = "free_x")
+
+# looking for multicolinearity using a correlation matrix
+#player_stats2 |> 
+#    
+#  # selecting the truly numeric rows
+#  select(avg_points, avg_fg_made, avg_fg_attempted, avg_three_made, avg_three_attempted, avg_free_throw_made, avg_free_throw_attempted, avg_mins, avg_rebounds, avg_assists, avg_steals, avg_blocks, avg_blocks, avg_turnovers) |>
+#creating the correlation matrix
+#  ggcorr(low ="red",
+#         mid = "white",
+#         high = "blue",
+#         label = T,
+#         label_round = 2)
+
+# creating a dataset to use in the regression
+player_stats_reg2 <- player_stats2 |>
+  column_to_rownames(var = "athlete_display_name") |>
+  select(avg_points, 
+         avg_fg_made, 
+         avg_fg_attempted, 
+         avg_three_made, 
+         avg_three_attempted, 
+         avg_free_throw_made, 
+         avg_free_throw_attempted, 
+         avg_mins, 
+         avg_rebounds, 
+         avg_assists, 
+         avg_steals, 
+         avg_blocks, 
+         avg_blocks, 
+         avg_turnovers)
+
+
+#creating the regression - subtracted rows above 10 from VIF
+player_stats_lm2 <- lm(formula = avg_points ~ . 
+                       - avg_fg_made 
+                       - avg_fg_attempted 
+                       - avg_three_attempted 
+                       - avg_free_throw_attempted 
+                       - avg_rebounds - avg_assists,
+                       data = player_stats_reg2) 
+
+#Commented out as to not display in knintted doc
+#looking at regression statistics
+#summary(player_stats_lm2)
+
+
+#more regression statistics
+stats_estimates2 <- tidy(player_stats_lm2) 
+
+#making the data more legible
+stats_estimates2 |>
+  mutate(across(.cols = where(is.numeric),
+                .fns = round,
+                digits = 3))
+
+
+#Commented out as to not display in knintted doc
+# using variance inflation factor to determine which variables are causing problems
+#VIF(player_stats_lm2)
+
+
+
+#Calculating the fit statistics
+#Creating a function to calculate mae and mae reduction
+MAE <-function(actual, predicted){
+  mae <- abs(actual-predicted) |> mean()
+  mae_red <- 1 - mae/mean(abs(actual - mean(actual)))
+  return(list(mae = mae,
+              reduction = mae_red))
+}
+
+#adding  model data to original data set
+player_stats2 <- augment_columns(x = player_stats_lm2,
+                                 data = player_stats_reg2)
+
+#finding fit statistics
+fit_stats2 <- player_stats2 |>
+  summarize(
+    R2 = cor(avg_points, .fitted)^2,
+    MAE = MAE(actual = player_stats_reg2$avg_points,
+              predicted = player_stats_lm2$fit)$mae,
+    MAER = MAE(actual = player_stats_reg2$avg_points,
+               predicted = player_stats_lm2$fit)$reduction
+  )
+
+# creating the plot for the linear model
+resid_plot2 <- augment_columns(
+  x = player_stats_lm2,
+  data = player_stats_reg2
+) |>
+  ggplot(mapping = aes(x=.fitted,
+                       y=.resid)) +
+  geom_point() +
+  labs(x="Predicted Average Points",
+       y="Residual") +
+  geom_hline(yintercept = 0,
+             color = "red",
+             linetype="dashed",
+             linewidth=1) + 
+  geom_smooth(method = "loess",
+              formula = y~x,
+              se=F) +
+  
+  theme_bw() +
+  
+  # Centering the title
+  theme(plot.title = element_text(hjust = 0.5)) +
+  
+  # Making the title bold
+  theme(plot.title = element_text(face = "bold")) +
+  
+  labs(title = "Residual Plot of 2022-2023 Season")
+
+player_stats_lm2
+fit_stats2
+resid_plot2
+
+#diagnose any variable causing nonlinearity  in the model
+#gg_diagnose(fitted.lm = player_stats_lm,
+#           plot.all = F)
+
+```
+The results of the linear model can be interpreted as follows. For each increase in a player's average points by one, the value of an explanatory variable changes by the amount produced by the model. For example, for an increase in a player's average points by one, that player's average threes made will increase by about 1.7.
+
+The measure of fit statistics describe a 95% increase in prediction accuracy using R squared, or about 80% using the Mean Average Error Reduction.
+
+Finally, the residual plot is approximately linear which is an indication that is an appropriate model for making predictions about a player’s average points
+
+
+
+## Predicting the MIP for the 2023-2024 Season
+
+Since we have established that a players average points per season is the most important variable in classifying a MIP Award winner, we want to use our data to try and predict the next MIP Award winner. To do this we need to calculate the average points for each player in the NBA from the 2022-2023 season, and the ongoing 2023-2024 season:
+
+```{r NBA Seasons 2023 to 2024 Player Data}
+
+# Using a function from the hoopR package to load in NBA player data
+nba_2023_2024 <- load_nba_player_box(
+  seasons = c(2023:2024), # The seasons are based on the ending season (so 2023 is the 2022 - 2023 season)
+  dbConnection = NULL,
+  tablename = NULL
+) |>
+  
+  # Filtering only for regular season games
+  #season_type = 3 is what determines the games to be playoffs, we removed that to gather the regular season data
+  filter(season_type != 3)|>
+  
+  # Removing any games where they did not play
+  filter(did_not_play == "FALSE") |>
+  
+  select(season, athlete_display_name, points)|>
+  
+  group_by(athlete_display_name, 
+           season) |>
+  
+  summarize(avg_points = mean(points))
+
+
+
+nba_2023 <- nba_2023_2024 |>
+  
+  filter(season == 2023) |> # Only keeping the before
+  
+  select(athlete_display_name, season, avg_points, ) |> # Only keeping certain columns
+  
+  mutate(avg_points_2023 = avg_points) # Changing the name
+
+
+nba_2024 <- nba_2023_2024 |> 
+  
+  
+  filter(season == 2024) |> # Only keeping values from MIP season
+  
+  select(athlete_display_name, season, avg_points) |> # Only keeping certain columns
+  
+  mutate(avg_points_2024 = avg_points) # Changing the name
+
+
+mip_guess_data <- inner_join(x = nba_2023, y = nba_2024, by = "athlete_display_name") |> # Joining the data by the name (Any joing would've worked in this situation)
+  
+  # Keeping only the relevant columns
+  select(athlete_display_name, avg_points_2023, avg_points_2024)
+
+
+
+tibble(mip_guess_data)
+
+
+```
+
+
+Now that we found the average points for the last two seasons for each NBA player, we need to change the MIP data so we can use it with the newly created data frame:
+
+
+```{r Confirmed MIP Points}
+
+
+# Sadly, could not just pivot wider, since the players have two unique identifiers: their name and the season
+
+mip_wide_before <- mip_final |>
+  
+  # Making sure it only keeps the season before they won MIP
+  filter(mip_season == "Before") |> # Only keeping the before
+  
+  select(athlete_display_name, avg_points, mip_season) |> # Only keeping certain columns
+  
+  mutate(avg_points_before = avg_points) # Changing the name
+
+# Saving a data frame for the MIP season values
+mip_wide_after <- mip_final |> 
+  
+  
+  filter(mip_season == "MIP") |> # Only keeping values from MIP season
+  
+  select(athlete_display_name, avg_points, mip_season) |> # Only keeping certain columns
+  
+  mutate(avg_points_mip = avg_points) # Changing the name
+
+
+mip_wide <- inner_join(x = mip_wide_before, y = mip_wide_after, by = "athlete_display_name") |> # Joining the data by the name (Any joing would've worked in this situation)
+  
+  # Keeping only the relevant columns
+  select(athlete_display_name, avg_points_before, avg_points_mip)
+
+
+# Displaying mip_wide
+mip_wide
+
+
+```
+
+With confirmed MIP data and potential MIP data, we can calculate the total distance each current NBA player has from every MIP winner. The "distance" would be measured using Euclidean distance, where we are looking at the difference of the intersection of a player's last seasons points and the current season points versus the last 10 MIP winners. 
+
+The formla for Euclidean Distance is: √Σ(xi-yi)^2
+
+For our data, the calculation is: √Σ((player last season - MIP Player previous season)^2 + (player current season - MIP Player award winning season))^2 
+Must do the calculation for each MIP winner. 
+
+Using this formula, we can calculate the total Euclidean distance a player has from the last 10 MIP winners:
+
+
+```{r MIP Distance}
+
+# Creating a function for calculating Euclidean distance
+distance_calc <- function(player_s1, player_s2){
+  
+  
+  # Creating a function to calculate the sum of the euclidean distance from each MIP player
+  distance <- sqrt(  (player_s1 - mip_wide[1, 2])^2 + (player_s2 - mip_wide[1, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[2, 2])^2 + (player_s2 - mip_wide[2, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[3, 2])^2 + (player_s2 - mip_wide[3, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[4, 2])^2 + (player_s2 - mip_wide[4, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[5, 2])^2 + (player_s2 - mip_wide[5, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[6, 2])^2 + (player_s2 - mip_wide[6, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[7, 2])^2 + (player_s2 - mip_wide[7, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[8, 2])^2 + (player_s2 - mip_wide[8, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[9, 2])^2 + (player_s2 - mip_wide[9, 3])^2 ) +
+    sqrt(  (player_s1 - mip_wide[10, 2])^2 + (player_s2 - mip_wide[10, 3])^2 ) 
+  
+  # Returning the value
+  return(distance)
+  
+}
+
+# Creating an empty storage to keep all the distance values
+dis_storage <- rep(-1, length(mip_guess_data)) 
+
+# Creating a loop for every player in the data frame
+for(i in 1:411){
+  dis_storage[i] <- distance_calc(mip_guess_data[i, 2], mip_guess_data[i, 3])
+}
+
+# Pivoting the data from dis_storage to get all of the player total distances
+dis_test <- dis_storage |>
+  data.frame() |>
+  pivot_longer(
+    cols = everything(), # Using everything to get all of the columns
+    names_to = "name",
+    values_to = "distance"
+  ) |>
+  
+  # Only keeping the distance column
+  select(distance)
+
+# Using bin_cols to connect the columns together -> since the data is still in the correct order, bind_cols works 
+final_distance_data <- bind_cols(n = mip_guess_data$athlete_display_name, SE = dis_test)
+
+# Displaying a tibble of the data
+tibble(final_distance_data)
+```
+
+Now that we have calculated the total distance for each player, we can now find the smallest value to determine who we predict to win the MIP for the 2023-2024 NBA season.
+
+```{r Predicting the next MIP }
+
+# Using slice_min() to find which player has the smallest total sum of distance from all the MIP winners
+mip_guess <- final_distance_data |> slice_min(distance)
+
+# Displaying the value
+mip_guess
+
+```
+## Our Prediction for the next MIP: Alperen Sengun
+
+Through comparing the average points from the previous season to the current season to past MIP winners, we found that Alperen Sengun has the smallest sum of distance from the last 10 MIP winners. 
+
+An important thing to note is that we only used the average points of a player to calculate this. In the future, if we were to try and predict the MIP again we would try to include other variables in our calculation to find a more accurate prediction of the MIP. 
+
+Although there are other factors to help determine MIP, since the variable importance of average points is so high, we are comfortable predicting Alperen Sengun as the 2023-2024 Most Improved Player.
+
+
+## Conclusion:
+
+Overall, we found that there were specific variables that are more significant in selecting the Most Improved Player Award. Using a exploratory/visual analysis, and machine learning through a classification tree, we were able to establish that a players increase in average points per season is the most important factor in identifying if a player will win the MIP award. By looking at the season before, compared to the MIP season, we could see a clear change in average points per season. In addition to points, we saw that a players free throw, field goal, and three point percentage also played a role, which is correlated with the points scored.  Aside from points, we witnessed that in the last 10 years no center has won the award. This may be in part that defensive measures did not play a large roll in winning the MIP award, which would impact centers due to their defensive responsibilities. In conclusion, finding these patterns, we were able to show how significant the average points play a role in winning MIP.
+
+## Limitations & Recommendations
+
+Although the data we manipulated and analyzed let us create efficient visuals and tables, we know that with more data we would be able to provide more accurate and in depth analysis of our machine learning methods. Due to our initial difficulties retrieving and manipulating the data, we were only able to use the last 10 players to win the Most Improved Player Award to create our project. With more time, a larger more comprehensive data set, and a better understanding of the hoopR package, we believe that we would've included more data to support our analysis and findings. A key part of our project that took the hardest hit from the lack of data was our machine learning methods. For our classification tree, we only had 20 points of data to classify, where the average points alone correctly classified 95% of the options. While this could be the case if we added more data, we believe that with a larger sample we would've been able to go more in depth. This problem was also relevant when looking at our Linear Regression, due to the small sample size we weren't able to create a linear model appropriate for predicting a players average points based on other non-point related variables (free throw, three, and field goal %) and find a reliable correlation between the variables.
+
+In the future, the primary thing we would recommend would be to use all of the NBA MIP Award Winners, this would allow for a much more comprehensive analysis, and would allow us to see the trends in the MIP Award Winners over the years. Next, we would first recommend to find a fully comprehensive data set that includes if a player has won MIP. Doing this would save a significant amount of time and computing power, since we had to create our own vectors with the player name and year they won to help identify if a player has won the MIP and in what season they did it. Finally, if possible, a data set with summarized values would save a lot of time and computing power, since we spent most of the first part of the project trying to make a viable data source using the dplyr verb summarize.
+
